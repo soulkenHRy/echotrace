@@ -1,0 +1,1092 @@
+<!doctype html>
+<!--
+  EchoTrace: hackathon demo. Single file, sample data only, no backend, no API keys.
+  Needs an internet connection for Leaflet, the fonts and the OpenStreetMap tiles.
+
+  Laptop:   double-click this file, or run  python3 -m http.server 8000  in this folder
+            and open http://localhost:8000
+  Phone:    run the server with  python3 -m http.server 8000 --bind 0.0.0.0  and open
+            http://<your-laptop-ip>:8000 on the same Wi-Fi
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#ffffff">
+<title>EchoTrace</title>
+<meta name="description" content="Demo with sample data: find your nearest data center, then simulate when its 2 km area is quiet enough to run heavy work.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231f56c9'/%3E%3Ccircle cx='16' cy='16' r='3.4' fill='white'/%3E%3Cpath d='M10.6 10.6a7.6 7.6 0 0 0 0 10.8M21.4 10.6a7.6 7.6 0 0 1 0 10.8' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@112,600..800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    /* Layout: a white control column beside one live surface (the map on page 1,
+       the 2 km area model on page 2). On phones the two stack into one column. */
+    --paper: #eef2f3;
+    --surface: #ffffff;
+    --ink: #15222b;
+    --ink-soft: #3d4c56;
+    --muted: #5f6e77;
+    --line: #d7dfe2;
+    --accent: #1f56c9;
+    --accent-strong: #17429d;
+    --accent-wash: #e7eefc;
+
+    --bad: #c7372c;   --bad-wash: #fce9e6;
+    --warn: #8f5500;  --warn-wash: #fdf1db;
+    --good: #15703f;  --good-wash: #e0f3e7;
+    --pulse: #22a35a;
+
+    --sea: #d6e2e6;
+    --land: #f7f9f9;
+    --street: #e8edef;
+    --road: #dfe6e9;
+    --placeholder: #98a5ac;
+
+    --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(21, 34, 43, .06), 0 8px 24px rgba(21, 34, 43, .10);
+    color-scheme: light;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 15px/1.5 var(--font-body);
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+  }
+  h1, h2, p, ul { margin: 0; }
+  ul { padding: 0; list-style: none; }
+  button, input { font: inherit; color: inherit; }
+  button { touch-action: manipulation; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  .app { min-height: 100%; display: flex; flex-direction: column; }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    flex: none;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    min-height: calc(56px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 16px 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand {
+    display: inline-flex; align-items: center; gap: 10px;
+    color: var(--ink); text-decoration: none;
+    font: 800 19px/1 var(--font-display); font-stretch: 112%; letter-spacing: -.01em;
+  }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    display: grid; place-items: center;
+    background: var(--accent); color: var(--surface);
+  }
+  .tag {
+    padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap;
+    font: 500 12px/1 var(--font-mono); letter-spacing: .04em; color: var(--muted);
+  }
+
+  /* ---------- Shared type and buttons ---------- */
+  .h1 {
+    font-family: var(--font-display); font-stretch: 112%; font-weight: 760;
+    font-size: clamp(1.4rem, 1.1rem + 1.1vw, 1.9rem); line-height: 1.12; letter-spacing: -.015em;
+    text-wrap: balance;
+  }
+  .eyebrow { font: 600 11px/1.3 var(--font-mono); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .code { font: 600 12px/1.2 var(--font-mono); letter-spacing: .05em; color: var(--accent); }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    height: 46px; padding: 0 18px;
+    border: 1.5px solid transparent; border-radius: 10px;
+    font-size: 15px; font-weight: 600; line-height: 1.2; text-align: center;
+    cursor: pointer; user-select: none;
+    transition: background-color .15s, border-color .15s, color .15s, transform .08s;
+  }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { opacity: .42; cursor: not-allowed; }
+  .btn svg { flex: none; }
+  .btn-primary { background: var(--accent); color: var(--surface); }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-strong); }
+  .btn-secondary { background: var(--surface); border-color: var(--line); color: var(--ink); }
+  .btn-secondary:hover:not(:disabled) { border-color: var(--ink-soft); }
+  .btn-ghost { background: transparent; color: var(--ink-soft); }
+  .btn-ghost:hover:not(:disabled) { background: var(--paper); color: var(--ink); }
+  .btn-block { width: 100%; }
+
+  /* ---------- Page 1: find ---------- */
+  .page-find { flex: 1; display: flex; flex-direction: column; }
+  .panel {
+    display: flex; flex-direction: column; gap: 18px;
+    padding: 20px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .intro { display: grid; gap: 6px; }
+  .lede { max-width: 42ch; color: var(--muted); }
+
+  .search { display: grid; gap: 8px; }
+  .label { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+  .search-row { display: flex; gap: 8px; }
+  .input {
+    flex: 1; min-width: 0; height: 52px; padding: 0 14px;
+    border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface);
+    font: 600 19px/1 var(--font-mono); letter-spacing: .08em; text-transform: uppercase;
+  }
+  .input::placeholder { color: var(--placeholder); font-weight: 500; letter-spacing: .03em; text-transform: none; }
+  .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-wash); }
+  .input[aria-invalid="true"] { border-color: var(--bad); }
+  .search-row .btn { height: 52px; padding: 0 24px; }
+  .try { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+  .try > span { margin-right: 2px; }
+  .chip {
+    height: 32px; padding: 0 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--paper); color: var(--ink-soft);
+    font: 600 12.5px/1 var(--font-mono); letter-spacing: .05em; cursor: pointer;
+  }
+  .chip:hover { border-color: var(--accent); background: var(--accent-wash); color: var(--accent); }
+  .error { font-size: 14px; color: var(--bad); }
+
+  .result {
+    display: grid; gap: 12px; padding: 16px;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    animation: rise .35s ease both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .result-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .zone {
+    padding: 4px 9px; border-radius: 999px; white-space: nowrap;
+    background: var(--paper); color: var(--ink-soft); font-size: 12px; font-weight: 600;
+  }
+  .zone.inside { background: var(--accent-wash); color: var(--accent-strong); }
+  .result-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+  .result-id { min-width: 0; display: grid; gap: 3px; }
+  .result-name { font-family: var(--font-display); font-stretch: 112%; font-weight: 700; font-size: 21px; line-height: 1.15; }
+  .result-place, .result-from { font-size: 13px; color: var(--muted); }
+  .result-km { font: 600 36px/1 var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -.03em; white-space: nowrap; }
+  .result-km small { margin-left: 4px; font-size: 15px; font-weight: 500; letter-spacing: 0; color: var(--muted); }
+
+  .sites { display: none; }
+  .sites-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .h2 { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
+  .sites-note { font-size: 12px; color: var(--muted); }
+  .site-list { border-top: 1px solid var(--line); }
+  .site-row {
+    width: 100%; display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; align-items: center; gap: 10px;
+    padding: 10px 6px; border: 0; border-bottom: 1px solid var(--line); background: none;
+    text-align: left; cursor: pointer;
+  }
+  .site-row:hover { background: var(--paper); }
+  .site-row .code { color: var(--ink-soft); }
+  .site-name { display: block; font-size: 14px; font-weight: 600; }
+  .site-place { display: block; font-size: 12px; color: var(--muted); }
+  .site-km { font: 500 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--ink-soft); white-space: nowrap; }
+  .site-row.is-nearest .code, .site-row.is-nearest .site-km { color: var(--accent); font-weight: 600; }
+  .panel-foot { display: none; margin-top: auto; font-size: 12px; color: var(--muted); }
+
+  .map-wrap { position: relative; flex: 1; min-height: 300px; }
+  #map { position: absolute; inset: 0; }
+  .map-fail { padding: 24px; color: var(--ink-soft); }
+
+  /* Leaflet overrides and map markers */
+  .leaflet-container { background: var(--sea); font-family: var(--font-body); }
+  .leaflet-tile-pane { filter: saturate(.6) brightness(1.02); }
+  .leaflet-popup-content-wrapper { border-radius: 12px; box-shadow: var(--shadow); }
+  .leaflet-popup-content { margin: 14px 16px; }
+  .leaflet-popup-content .pop p { margin: 0; }
+
+  .dc-pin {
+    --pin: var(--ink);
+    width: 30px; height: 30px; display: grid; place-items: center;
+    border-radius: 8px; background: var(--pin); color: var(--surface);
+    border: 2px solid var(--surface); box-shadow: 0 2px 6px rgba(21, 34, 43, .35);
+    transition: transform .2s;
+  }
+  .dc-pin svg { display: block; width: 15px; height: 15px; }
+  .dc-pin .led { fill: var(--pin); }
+  .dc-icon:hover .dc-pin { transform: scale(1.08); }
+  .dc-icon.is-nearest .dc-pin { --pin: var(--accent); transform: scale(1.2); }
+  .map-tag {
+    position: absolute; top: 50%; left: calc(100% + 7px); transform: translateY(-50%);
+    padding: 4px 7px; border-radius: 6px; white-space: nowrap;
+    background: var(--surface); color: var(--ink); box-shadow: 0 1px 4px rgba(21, 34, 43, .28);
+    font: 600 11px/1 var(--font-mono); letter-spacing: .04em;
+  }
+  .dc-icon.is-nearest .map-tag { background: var(--accent); color: var(--surface); }
+  .hide-tags .dc-icon .map-tag { display: none; }
+  .gta-bubble {
+    width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%;
+    background: var(--ink); color: var(--surface); border: 3px solid var(--surface);
+    box-shadow: 0 0 0 6px rgba(21, 34, 43, .16), 0 3px 8px rgba(21, 34, 43, .3);
+    font: 600 16px/1 var(--font-mono);
+  }
+  .you-dot {
+    position: relative; display: block; width: 18px; height: 18px; border-radius: 50%;
+    background: var(--accent); border: 3px solid var(--surface); box-shadow: 0 1px 5px rgba(21, 34, 43, .4);
+  }
+  .you-dot::after {
+    content: ""; position: absolute; inset: -3px; border-radius: 50%;
+    border: 2px solid var(--accent); animation: ping 2s ease-out infinite;
+  }
+  @keyframes ping { from { transform: scale(1); opacity: .9; } to { transform: scale(2.8); opacity: 0; } }
+  .you-icon .map-tag { left: auto; right: calc(100% + 7px); background: var(--ink); color: var(--surface); }
+  .leaflet-tooltip.route-tip {
+    padding: 3px 9px; border: 1.5px solid var(--accent); border-radius: 999px;
+    background: var(--surface); color: var(--accent-strong); box-shadow: 0 1px 4px rgba(21, 34, 43, .2);
+    font: 600 12px/1.2 var(--font-mono);
+  }
+  .leaflet-tooltip.route-tip::before { display: none; }
+
+  .pop { display: grid; gap: 3px; min-width: 180px; font-size: 13px; }
+  .pop-name { font-family: var(--font-display); font-stretch: 112%; font-weight: 700; font-size: 17px; line-height: 1.2; color: var(--ink); }
+  .pop-place { color: var(--muted); }
+  .pop-km { font: 500 12.5px/1.4 var(--font-mono); color: var(--ink-soft); }
+  .pop .btn { height: 38px; margin-top: 8px; font-size: 14px; }
+
+  /* ---------- Page 2: area simulation ---------- */
+  .page-area {
+    flex: 1; display: grid; grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "stage" "controls"; align-content: start;
+  }
+  .area-head {
+    grid-area: head; display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  .btn-back { flex: none; height: 40px; padding: 0 12px 0 8px; margin-left: -8px; }
+  .area-title { min-width: 0; display: grid; gap: 2px; }
+  .area-title .h1 { font-size: clamp(1.15rem, 1rem + .9vw, 1.6rem); outline: none; }
+  .area-sub { font-size: 13px; color: var(--muted); }
+
+  .stage { grid-area: stage; position: relative; padding: 12px 16px; }
+  .stage-svg { display: block; width: 100%; height: min(calc(100vw - 32px), 44vh); height: min(calc(100vw - 32px), 44dvh); }
+
+  .controls {
+    grid-area: controls; display: grid; gap: 18px; align-content: start;
+    padding: 16px 16px 28px; background: var(--surface); border-top: 1px solid var(--line);
+  }
+  .status { display: grid; gap: 10px; }
+  .status-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px 0 12px; border-radius: 999px;
+    font-size: 15px; font-weight: 700; transition: background-color .3s, color .3s;
+  }
+  .pill::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: currentColor; }
+  .pill[data-level="bad"] { background: var(--bad-wash); color: var(--bad); }
+  .pill[data-level="warn"] { background: var(--warn-wash); color: var(--warn); }
+  .pill[data-level="good"] { background: var(--good-wash); color: var(--good); }
+  .pct { font: 500 13px/1 var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+  .status-text { min-height: 3em; color: var(--ink-soft); }
+
+  .meter { display: grid; gap: 7px; padding-top: 4px; }
+  .meter-bar { position: relative; height: 10px; border-radius: 999px; }
+  .meter-bar i { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--surface); }
+  .meter-marker {
+    position: absolute; top: 50%; left: 0; width: 18px; height: 18px; margin: -9px 0 0 -9px;
+    border-radius: 50%; background: var(--surface); border: 3px solid var(--ink);
+    box-shadow: 0 1px 3px rgba(21, 34, 43, .3); transition: left .45s cubic-bezier(.4, 0, .2, 1);
+  }
+  .meter-scale { display: grid; font-size: 11.5px; color: var(--muted); }
+  .meter-scale span:nth-child(2) { text-align: center; }
+  .meter-scale span:nth-child(3) { text-align: right; }
+
+  .counts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+    background: var(--line); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden;
+  }
+  .count { display: grid; gap: 2px; padding: 12px 14px; background: var(--surface); }
+  .count-num { font: 600 32px/1.05 var(--font-mono); font-variant-numeric: tabular-nums; transform-origin: left center; }
+  .count-label { font-size: 13px; color: var(--muted); }
+  .bump { animation: bump .35s ease; }
+  @keyframes bump { 40% { transform: scale(1.16); } }
+
+  .actions { display: grid; gap: 8px; }
+  .btn-leave { height: 58px; font-size: 16px; }
+  .actions-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .explain { max-width: 46ch; font-size: 13.5px; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-soft); }
+  .legend li { display: inline-flex; align-items: center; gap: 8px; }
+  .legend-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--ink); }
+  .legend-dot.away { background: var(--surface); border: 1.5px solid var(--muted); }
+
+  /* The 2D area drawing */
+  .st-land { fill: var(--land); }
+  .st-street { fill: none; stroke: var(--street); stroke-width: 1; }
+  .st-road { fill: none; stroke: var(--road); stroke-width: 8; stroke-linecap: round; }
+  .st-road.thin { stroke-width: 5; }
+  .st-frame { fill: none; stroke: var(--line); }
+  .area { color: hsl(0, 70%, 34%); transition: color .5s; }
+  .area-fill { fill: hsl(0, 75%, 50%); fill-opacity: .22; stroke: currentColor; stroke-width: 2.5; transition: fill .5s; }
+  .area-radius { stroke: currentColor; stroke-width: 1.5; stroke-dasharray: 1 5; stroke-linecap: round; }
+  .area-tag rect { fill: var(--surface); stroke: currentColor; stroke-width: 1.5; }
+  .area-tag text { fill: currentColor; font: 600 11px var(--font-mono); letter-spacing: .03em; }
+  .person { fill: var(--ink); stroke: var(--surface); stroke-width: 1.5; }
+  .person.is-away { fill: var(--surface); stroke: var(--muted); }
+  .stage.animate .person { transition: transform .9s cubic-bezier(.45, 0, .2, 1), fill .35s, stroke .35s; }
+  .dc-body { fill: var(--ink); stroke: var(--surface); stroke-width: 3; }
+  .dc-glyph rect { fill: var(--surface); }
+  .dc-glyph circle { fill: var(--ink); }
+  .dc-label rect { fill: var(--ink); }
+  .dc-label text { fill: var(--surface); font: 600 11px var(--font-mono); letter-spacing: .05em; }
+  .dc-pulse circle { fill: none; stroke: var(--pulse); stroke-width: 2.5; opacity: 0; transform-box: fill-box; transform-origin: center; }
+  .dc-pulse.running circle { animation: pulse 2.2s ease-out infinite; }
+  .dc-pulse.running circle + circle { animation-delay: 1.1s; }
+  @keyframes pulse { from { transform: scale(1); opacity: .85; } to { transform: scale(3.4); opacity: 0; } }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 899px) {
+    /* Keep a usable map under the result card; the page scrolls to it after a search. */
+    .map-wrap { min-height: max(300px, 55vh); min-height: max(300px, 55svh); }
+  }
+  @media (max-width: 599px) {
+    .lede, .area-title .eyebrow, .area-residents, .meter { display: none; }
+    /* Phones: the drawing takes whatever height is left once the status, counters and
+       main button fit on screen, and the status sentence moves below the buttons. */
+    .stage-svg {
+      height: clamp(220px, calc(100vh - 370px), calc(100vw - 32px));
+      height: clamp(220px, calc(100svh - 370px), calc(100vw - 32px));
+    }
+    .controls { gap: 14px; }
+    .status { display: contents; }
+    .status-top { order: 1; }
+    .counts { order: 2; }
+    .actions { order: 3; }
+    .status-text { order: 4; min-height: 0; }
+    .explain { order: 5; }
+    .legend { order: 6; }
+    .count { padding: 10px 14px; }
+    .count-num { font-size: 28px; }
+  }
+  @media (min-width: 600px) and (max-width: 899px) {
+    .panel, .area-head, .controls { padding-inline: max(16px, calc((100% - 680px) / 2)); }
+  }
+  @media (min-width: 900px) {
+    .app { height: 100%; }
+    .page-find { display: grid; grid-template-columns: 400px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); min-height: 0; }
+    .panel { min-height: 0; overflow-y: auto; padding: 28px; gap: 22px; border-bottom: 0; border-right: 1px solid var(--line); }
+    .sites { display: grid; gap: 10px; }
+    .panel-foot { display: block; }
+    .map-wrap { min-height: 0; }
+
+    .page-area {
+      grid-template-columns: 400px minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
+      grid-template-areas: "head stage" "controls stage"; align-content: stretch; min-height: 0;
+    }
+    .area-head { flex-direction: column; align-items: flex-start; gap: 16px; padding: 22px 28px 6px; border-bottom: 0; border-right: 1px solid var(--line); }
+    .btn-back { margin-left: -10px; }
+    .controls { min-height: 0; overflow-y: auto; padding: 18px 28px 28px; border-top: 0; border-right: 1px solid var(--line); }
+    .stage { padding: 0; }
+    .stage-svg { position: absolute; inset: 28px; width: calc(100% - 56px); height: calc(100% - 56px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="#map" aria-label="EchoTrace, back to the map">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="18" height="18"><circle cx="12" cy="12" r="2.6" fill="currentColor"/><path d="M8.1 8.1a5.5 5.5 0 0 0 0 7.8M15.9 8.1a5.5 5.5 0 0 1 0 7.8M5.3 5.3a9.5 9.5 0 0 0 0 13.4M18.7 5.3a9.5 9.5 0 0 1 0 13.4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </span>
+      EchoTrace
+    </a>
+    <span class="tag">Demo · sample data</span>
+  </header>
+
+  <!-- ============ PAGE 1: find your nearest data center ============ -->
+  <main id="page-find" class="page-find">
+    <section class="panel" aria-labelledby="find-title">
+      <div class="intro">
+        <h1 id="find-title" class="h1">Find your nearest data center</h1>
+        <p class="lede">Enter your postal code to see the closest data center and how far away it is.</p>
+      </div>
+
+      <form id="search-form" class="search" novalidate>
+        <label class="label" for="postal">Postal code</label>
+        <div class="search-row">
+          <input id="postal" class="input" name="postal" type="text" placeholder="e.g. M5V 3L9" maxlength="7"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="search-error">
+          <button class="btn btn-primary" type="submit">Find</button>
+        </div>
+        <div class="try">
+          <span>Try</span>
+          <button type="button" class="chip" data-code="M9W">M9W</button>
+          <button type="button" class="chip" data-code="M5V">M5V</button>
+          <button type="button" class="chip" data-code="M4C">M4C</button>
+          <button type="button" class="chip" data-code="M1B">M1B</button>
+        </div>
+        <p id="search-error" class="error" role="alert" hidden></p>
+      </form>
+
+      <section id="result" class="result" aria-live="polite" hidden>
+        <div class="result-head">
+          <p class="eyebrow">Nearest data center</p>
+          <span id="r-zone" class="zone">Inside its 2 km area</span>
+        </div>
+        <div class="result-main">
+          <div class="result-id">
+            <span id="r-code" class="code">TOR-2</span>
+            <h2 id="r-name" class="result-name">Harbourfront</h2>
+            <p id="r-place" class="result-place">Downtown Toronto, Canada</p>
+          </div>
+          <p class="result-km"><span id="r-km">1.2</span><small>km</small></p>
+        </div>
+        <p id="r-from" class="result-from">from M5V · King West, Downtown</p>
+        <button id="view-area" class="btn btn-primary btn-block" type="button">
+          View this area
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </section>
+
+      <section class="sites" aria-labelledby="sites-title">
+        <div class="sites-head">
+          <h2 id="sites-title" class="h2">Sample data centers</h2>
+          <span id="sites-note" class="sites-note"></span>
+        </div>
+        <ul id="site-list" class="site-list"></ul>
+      </section>
+
+      <p class="panel-foot">All names, locations and numbers on this page are made up for the demo.</p>
+    </section>
+
+    <section id="map-wrap" class="map-wrap" aria-label="Map of sample data centers">
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <!-- ============ PAGE 2: 2 km area simulation ============ -->
+  <main id="page-area" class="page-area" hidden>
+    <header class="area-head">
+      <button id="btn-back" class="btn btn-ghost btn-back" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Back
+      </button>
+      <div class="area-title">
+        <p class="eyebrow">Area simulation · 2 km radius</p>
+        <h1 id="area-name" class="h1" tabindex="-1">TOR-2 · Harbourfront</h1>
+        <p class="area-sub"><span id="area-place">Downtown Toronto, Canada</span><span class="area-residents"> · 20 residents nearby</span></p>
+      </div>
+    </header>
+
+    <div id="stage" class="stage">
+      <svg class="stage-svg" viewBox="0 0 400 400" role="img" aria-labelledby="stage-title stage-desc">
+        <title id="stage-title">The 2 km area around the data center</title>
+        <desc id="stage-desc">The data center sits in the middle of a 2 km circle. Each dot is one person who lives nearby.</desc>
+        <defs>
+          <pattern id="blocks" width="25" height="25" patternUnits="userSpaceOnUse">
+            <path class="st-street" d="M25 0H0V25"/>
+          </pattern>
+          <clipPath id="tile-clip"><rect width="400" height="400" rx="20"/></clipPath>
+        </defs>
+        <g clip-path="url(#tile-clip)">
+          <rect class="st-land" width="400" height="400"/>
+          <rect width="400" height="400" fill="url(#blocks)"/>
+          <path class="st-road" d="M-10 272C80 252 190 300 410 238"/>
+          <path class="st-road" d="M126-10C150 120 108 250 150 410"/>
+          <path class="st-road thin" d="M262-10L318 410"/>
+        </g>
+        <rect class="st-frame" x=".5" y=".5" width="399" height="399" rx="19.5"/>
+
+        <g id="area" class="area">
+          <circle id="area-fill" class="area-fill" cx="200" cy="200" r="130"/>
+          <line class="area-radius" x1="200" y1="200" x2="200" y2="81"/>
+          <g class="area-tag" transform="translate(200 70)">
+            <rect x="-25" y="-11" width="50" height="22" rx="11"/>
+            <text y="4" text-anchor="middle">2 km</text>
+          </g>
+        </g>
+
+        <g id="dc-pulse" class="dc-pulse" transform="translate(200 200)">
+          <circle r="22"/>
+          <circle r="22"/>
+        </g>
+
+        <g id="people"></g>
+
+        <g class="dc" transform="translate(200 200)">
+          <rect class="dc-body" x="-19" y="-19" width="38" height="38" rx="9"/>
+          <g class="dc-glyph">
+            <rect x="-11" y="-11.5" width="22" height="6" rx="1.8"/>
+            <rect x="-11" y="-3" width="22" height="6" rx="1.8"/>
+            <rect x="-11" y="5.5" width="22" height="6" rx="1.8"/>
+            <circle cx="-7" cy="-8.5" r="1.3"/>
+            <circle cx="-7" cy="0" r="1.3"/>
+            <circle cx="-7" cy="8.5" r="1.3"/>
+          </g>
+          <g class="dc-label" transform="translate(0 34)">
+            <rect x="-26" y="-10" width="52" height="20" rx="6"/>
+            <text id="dc-code" y="4" text-anchor="middle">TOR-2</text>
+          </g>
+        </g>
+      </svg>
+    </div>
+
+    <section class="controls" aria-label="Simulation controls">
+      <div class="status">
+        <div class="status-top">
+          <span id="status-pill" class="pill" data-level="bad">Not safe</span>
+          <span id="pct" class="pct">0% away</span>
+        </div>
+        <p id="status-text" class="status-text" aria-live="polite">Most people nearby are home. Heavy work stays paused.</p>
+        <div class="meter" aria-hidden="true">
+          <div id="meter-bar" class="meter-bar">
+            <i id="tick-safer"></i><i id="tick-safe"></i>
+            <span id="meter-marker" class="meter-marker"></span>
+          </div>
+          <div id="meter-scale" class="meter-scale"><span>Not safe</span><span>Getting safer</span><span>Safe to run</span></div>
+        </div>
+      </div>
+
+      <div class="counts">
+        <div class="count"><span id="count-left" class="count-num">0</span><span class="count-label">left the area</span></div>
+        <div class="count"><span id="count-near" class="count-num">20</span><span class="count-label">still within 2 km</span></div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-leave" class="btn btn-primary btn-leave" type="button">I’m leaving the area (2 km+)</button>
+        <div class="actions-row">
+          <button id="btn-home" class="btn btn-secondary" type="button">I’m back home</button>
+          <button id="btn-reset" class="btn btn-ghost" type="button">Reset</button>
+        </div>
+      </div>
+
+      <p class="explain">The greener the area, the fewer people are nearby, so the safer it is for the data center to run heavy work right now.</p>
+      <ul class="legend">
+        <li><span class="legend-dot"></span>Home, within 2 km</li>
+        <li><span class="legend-dot away"></span>Left the area</li>
+      </ul>
+    </section>
+  </main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(() => {
+  'use strict';
+
+  /* ---------- Sample data: every name, place and number here is made up ---------- */
+  const DATA_CENTERS = [
+    { id: 'tor-1', code: 'TOR-1', name: 'Humber Ridge', place: 'Etobicoke, Toronto', country: 'Canada', lat: 43.7180, lng: -79.6080, gta: true },
+    { id: 'tor-2', code: 'TOR-2', name: 'Harbourfront', place: 'Downtown Toronto', country: 'Canada', lat: 43.6455, lng: -79.3810, gta: true },
+    { id: 'tor-3', code: 'TOR-3', name: 'Don Mills', place: 'North York, Toronto', country: 'Canada', lat: 43.7230, lng: -79.3420, gta: true },
+    { id: 'tor-4', code: 'TOR-4', name: 'Rouge Valley', place: 'Scarborough, Toronto', country: 'Canada', lat: 43.7880, lng: -79.2390, gta: true },
+    { id: 'tor-5', code: 'TOR-5', name: 'Downsview', place: 'North York, Toronto', country: 'Canada', lat: 43.7480, lng: -79.4780, gta: true },
+    { id: 'tor-6', code: 'TOR-6', name: 'Meadowvale', place: 'Mississauga', country: 'Canada', lat: 43.5960, lng: -79.7350, gta: true },
+    { id: 'dfw-1', code: 'DFW-1', name: 'Trinity', place: 'Dallas, Texas', country: 'USA', lat: 32.8998, lng: -96.9520 },
+    { id: 'dub-1', code: 'DUB-1', name: 'Liffey', place: 'Dublin', country: 'Ireland', lat: 53.3300, lng: -6.3800 },
+    { id: 'fra-1', code: 'FRA-1', name: 'Mainhafen', place: 'Frankfurt', country: 'Germany', lat: 50.0990, lng: 8.6330 },
+    { id: 'sin-1', code: 'SIN-1', name: 'Jurong', place: 'Singapore', country: 'Singapore', lat: 1.3329, lng: 103.7436 },
+  ];
+
+  // Hardcoded Toronto postal code areas (first three characters) instead of a real lookup.
+  const POSTAL_CODES = {
+    M9W: { area: 'Rexdale, Etobicoke', lat: 43.7067, lng: -79.5941 },
+    M5V: { area: 'King West, Downtown', lat: 43.6440, lng: -79.3960 },
+    M4C: { area: 'Woodbine Heights, East York', lat: 43.6953, lng: -79.3184 },
+    M1B: { area: 'Malvern, Scarborough', lat: 43.8067, lng: -79.1944 },
+    M5H: { area: 'Financial District, Downtown', lat: 43.6506, lng: -79.3846 },
+    M6P: { area: 'High Park North', lat: 43.6616, lng: -79.4648 },
+    M2N: { area: 'Willowdale, North York', lat: 43.7700, lng: -79.4085 },
+    M3J: { area: 'York University Heights', lat: 43.7680, lng: -79.4873 },
+  };
+
+  /* ---------- Area simulation settings ---------- */
+  const RESIDENTS = 20;   // dots inside the 2 km circle
+  const SAFER_AT = 0.30;  // share of residents away before "Getting safer"
+  const SAFE_AT = 0.65;   // share away before "Safe to run"
+  const STATUS = {
+    bad:  { label: 'Not safe',      text: 'Most people nearby are home. Heavy work stays paused.' },
+    warn: { label: 'Getting safer', text: 'The area is emptying out. Light work only for now.' },
+    good: { label: 'Safe to run',   text: 'Most people have left the area. Good time to run heavy work.' },
+  };
+
+  const $ = (selector) => document.querySelector(selector);
+  const byId = Object.fromEntries(DATA_CENTERS.map((dc) => [dc.id, dc]));
+  const where = (dc) => (dc.place === dc.country ? dc.place : `${dc.place}, ${dc.country}`);
+  const fmtKm = (km) => (km < 100 ? km.toFixed(1) : Math.round(km).toLocaleString('en-CA'));
+  const hueFor = (share) => Math.round(135 * share);   // 0 = red, 135 = green
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function distanceKm(a, b) {
+    const rad = Math.PI / 180;
+    const dLat = (b.lat - a.lat) * rad;
+    const dLng = (b.lng - a.lng) * rad;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLng / 2) ** 2;
+    return 2 * 6371 * Math.asin(Math.sqrt(h));
+  }
+
+  const pageFind = $('#page-find');
+  const pageArea = $('#page-area');
+  const mapEl = $('#map');
+
+  if (!window.L) {
+    mapEl.innerHTML = '<p class="map-fail">The map library didn’t load. Check the internet connection and reload the page.</p>';
+    return;
+  }
+
+  /* =========================================================
+     Page 1: map and postal code search
+     ========================================================= */
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+  const map = L.map(mapEl, { minZoom: 1, worldCopyJump: true });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    updateWhenZooming: false,   // skip tiles for the zoom levels a fly-to passes through
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  }).addTo(map);
+
+  const SERVER_GLYPH = '<svg viewBox="0 0 16 16" aria-hidden="true">'
+    + '<rect x="2" y="2" width="12" height="3.4" rx="1" fill="currentColor"/>'
+    + '<rect x="2" y="6.3" width="12" height="3.4" rx="1" fill="currentColor"/>'
+    + '<rect x="2" y="10.6" width="12" height="3.4" rx="1" fill="currentColor"/>'
+    + '<circle class="led" cx="4.3" cy="3.7" r=".8"/><circle class="led" cx="4.3" cy="8" r=".8"/><circle class="led" cx="4.3" cy="12.3" r=".8"/>'
+    + '</svg>';
+
+  const siteIcon = (dc, nearest) => L.divIcon({
+    className: nearest ? 'dc-icon is-nearest' : 'dc-icon',
+    html: `<span class="dc-pin">${SERVER_GLYPH}</span><span class="map-tag">${dc.code}</span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -18],
+  });
+
+  const markers = {};
+  DATA_CENTERS.forEach((dc) => {
+    const marker = L.marker([dc.lat, dc.lng], { icon: siteIcon(dc, false), title: `${dc.code} · ${dc.name}`, riseOnHover: true });
+    marker.bindPopup(() => popupFor(dc), { autoPanPadding: [24, 24] });
+    markers[dc.id] = marker;
+    if (!dc.gta) marker.addTo(map);
+  });
+
+  // Zoomed out, the Toronto sites sit on top of each other, so they share one bubble.
+  const GTA_DETAIL_ZOOM = 9;
+  const gtaSites = DATA_CENTERS.filter((dc) => dc.gta);
+  const gtaBounds = L.latLngBounds(gtaSites.map((dc) => [dc.lat, dc.lng]));
+  const gtaBubble = L.marker(gtaBounds.getCenter(), {
+    icon: L.divIcon({
+      className: 'gta-icon',
+      html: `<span class="gta-bubble">${gtaSites.length}</span><span class="map-tag">Toronto area</span>`,
+      iconSize: [44, 44],
+      iconAnchor: [22, 22],
+    }),
+    title: `Toronto area: ${gtaSites.length} data centers`,
+    zIndexOffset: 500,
+  }).on('click', () => map.flyToBounds(gtaBounds, { padding: [48, 48], duration: 1.1, animate: !reducedMotion }));
+
+  function syncZoom() {
+    const zoom = map.getZoom();
+    const detail = zoom >= GTA_DETAIL_ZOOM;
+    gtaSites.forEach((dc) => {
+      const marker = markers[dc.id];
+      if (detail && !map.hasLayer(marker)) marker.addTo(map);
+      if (!detail && map.hasLayer(marker)) marker.remove();
+    });
+    if (detail) gtaBubble.remove();
+    else if (!map.hasLayer(gtaBubble)) gtaBubble.addTo(map);
+    mapEl.classList.toggle('hide-tags', zoom < 4);
+  }
+  map.on('zoomend', syncZoom);
+
+  const searchLayer = L.layerGroup().addTo(map);
+  let search = null;      // { code, area, lat, lng } of the last postal code searched
+  let nearestId = null;
+  let routeLine = null;
+
+  // Show the distance label on the route only when the line is long enough to hold it.
+  function syncRouteLabel() {
+    if (!routeLine) return;
+    const [a, b] = routeLine.getLatLngs().map((latlng) => map.latLngToContainerPoint(latlng));
+    if (a.distanceTo(b) > 130) routeLine.openTooltip();
+    else routeLine.closeTooltip();
+  }
+  map.on('moveend', syncRouteLabel);
+
+  function setNearest(id) {
+    if (nearestId) markers[nearestId].setIcon(siteIcon(byId[nearestId], false)).setZIndexOffset(0);
+    nearestId = id;
+    markers[id].setIcon(siteIcon(byId[id], true)).setZIndexOffset(800);
+  }
+
+  function popupFor(dc) {
+    const el = document.createElement('div');
+    el.className = 'pop';
+    el.innerHTML = `<p class="code">${dc.code}</p><p class="pop-name">${dc.name}</p><p class="pop-place">${where(dc)}</p>`
+      + (search ? `<p class="pop-km">${fmtKm(distanceKm(search, dc))} km from ${search.code}</p>` : '');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'btn btn-primary btn-block';
+    button.textContent = 'View this area';
+    button.addEventListener('click', () => openArea(dc.id));
+    el.append(button);
+    return el;
+  }
+
+  const form = $('#search-form');
+  const input = $('#postal');
+  const errorEl = $('#search-error');
+  const resultEl = $('#result');
+
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    runSearch(input.value);
+  });
+  document.querySelectorAll('.chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      input.value = chip.dataset.code;
+      runSearch(chip.dataset.code);
+    });
+  });
+  input.addEventListener('input', () => setError(''));
+
+  function setError(message) {
+    errorEl.textContent = message;
+    errorEl.hidden = !message;
+    input.setAttribute('aria-invalid', message ? 'true' : 'false');
+  }
+
+  function runSearch(raw) {
+    const cleaned = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const code = cleaned.slice(0, 3);
+    if (!cleaned) return setError('Enter a postal code, like M5V 3L9.');
+    if (!/^[A-Z]\d[A-Z]/.test(cleaned)) return setError('That doesn’t look like a Canadian postal code. Try one like M5V 3L9.');
+    if (!POSTAL_CODES[code]) return setError(`${code} isn’t in this demo. Try M9W, M5V, M4C or M1B.`);
+    setError('');
+
+    search = { code, ...POSTAL_CODES[code] };
+    const [{ dc, km }] = DATA_CENTERS
+      .map((site) => ({ dc: site, km: distanceKm(search, site) }))
+      .sort((a, b) => a.km - b.km);
+
+    showResult(dc, km);
+    drawSearch(dc, km);
+    renderSites();
+    if (window.matchMedia('(max-width: 899px)').matches) {
+      // Stacked layout: close the keyboard, then bring the result card and map into view.
+      input.blur();
+      setTimeout(() => $('#map-wrap').scrollIntoView({ block: 'end', behavior: reducedMotion ? 'auto' : 'smooth' }), 250);
+    }
+  }
+
+  function showResult(dc, km) {
+    const inside = km <= 2;
+    const zone = $('#r-zone');
+    zone.textContent = inside ? 'Inside its 2 km area' : 'Outside its 2 km area';
+    zone.classList.toggle('inside', inside);
+    $('#r-code').textContent = dc.code;
+    $('#r-name').textContent = dc.name;
+    $('#r-place').textContent = where(dc);
+    $('#r-km').textContent = fmtKm(km);
+    $('#r-from').textContent = `from ${search.code} · ${search.area}`;
+    resultEl.dataset.site = dc.id;
+    resultEl.hidden = false;
+    resultEl.style.animation = 'none';
+    void resultEl.offsetWidth;   // restart the entrance animation on every search
+    resultEl.style.animation = '';
+  }
+  $('#view-area').addEventListener('click', () => openArea(resultEl.dataset.site));
+
+  function drawSearch(dc, km) {
+    searchLayer.clearLayers();
+    const you = L.latLng(search.lat, search.lng);
+    const site = L.latLng(dc.lat, dc.lng);
+    L.circle(site, { radius: 2000, color: accent, weight: 1.5, dashArray: '5 6', fillColor: accent, fillOpacity: 0.08, interactive: false })
+      .addTo(searchLayer);
+    routeLine = L.polyline([you, site], { color: accent, weight: 3, dashArray: '1 7', lineCap: 'round', interactive: false })
+      .bindTooltip(`${fmtKm(km)} km`, { permanent: true, direction: 'center', className: 'route-tip', opacity: 1 })
+      .addTo(searchLayer);
+    syncRouteLabel();
+    L.marker(you, {
+      icon: L.divIcon({
+        className: 'you-icon',
+        html: `<span class="you-dot"></span><span class="map-tag">You · ${search.code}</span>`,
+        iconSize: [18, 18],
+        iconAnchor: [9, 9],
+      }),
+      interactive: false,
+      keyboard: false,
+      zIndexOffset: 1000,
+    }).addTo(searchLayer);
+    setNearest(dc.id);
+    // The result card can shrink the map on phones; Leaflet must re-measure before framing.
+    map.invalidateSize();
+    // Frame the whole 2 km circle plus the user's location.
+    map.flyToBounds(site.toBounds(4400).extend(you), { padding: [40, 40], maxZoom: 15, duration: 1.2, animate: !reducedMotion });
+  }
+
+  const siteList = $('#site-list');
+  function renderSites() {
+    const rows = DATA_CENTERS.map((dc) => ({ dc, km: search ? distanceKm(search, dc) : null }));
+    if (search) rows.sort((a, b) => a.km - b.km);
+    siteList.innerHTML = rows.map(({ dc, km }) => `
+      <li><button type="button" class="site-row${dc.id === nearestId ? ' is-nearest' : ''}" data-id="${dc.id}">
+        <span class="code">${dc.code}</span>
+        <span><span class="site-name">${dc.name}</span><span class="site-place">${where(dc)}</span></span>
+        <span class="site-km">${km === null ? '' : `${fmtKm(km)} km`}</span>
+      </button></li>`).join('');
+    $('#sites-note').textContent = search ? `Distance from ${search.code}` : `${DATA_CENTERS.length} sites`;
+  }
+  siteList.addEventListener('click', (event) => {
+    const row = event.target.closest('.site-row');
+    if (!row) return;
+    const dc = byId[row.dataset.id];
+    map.once('moveend', () => markers[dc.id].openPopup());
+    map.flyTo([dc.lat, dc.lng], dc.gta ? Math.max(map.getZoom(), 12) : 5, { duration: 1, animate: !reducedMotion });
+  });
+
+  /* =========================================================
+     Navigation between the two pages (hash based, so the
+     browser and phone back gestures work too)
+     ========================================================= */
+  let mapReady = false;
+  let cameFromMap = false;
+
+  function openArea(id) {
+    cameFromMap = !pageFind.hidden;
+    map.closePopup();
+    location.hash = `area-${id}`;
+  }
+
+  function route() {
+    const match = /^#area-([a-z0-9-]+)$/i.exec(location.hash);
+    const dc = match && byId[match[1].toLowerCase()];
+    if (dc) showArea(dc);
+    else showFind();
+  }
+  window.addEventListener('hashchange', route);
+
+  function showFind() {
+    cameFromMap = false;
+    pageArea.hidden = true;
+    pageFind.hidden = false;
+    document.title = 'EchoTrace';
+    if (mapReady) {
+      map.invalidateSize();
+      return;
+    }
+    map.fitBounds(L.latLngBounds(DATA_CENTERS.map((dc) => [dc.lat, dc.lng])), { padding: [28, 28] });
+    mapReady = true;
+    syncZoom();
+  }
+
+  $('#btn-back').addEventListener('click', () => {
+    if (cameFromMap) history.back();
+    else location.hash = 'map';
+  });
+
+  /* =========================================================
+     Page 2: 2 km area simulation
+     ========================================================= */
+  const stage = $('#stage');
+  const peopleLayer = $('#people');
+  const areaGroup = $('#area');
+  const areaFill = $('#area-fill');
+  const pulse = $('#dc-pulse');
+  const pill = $('#status-pill');
+  const statusText = $('#status-text');
+  const countLeft = $('#count-left');
+  const countNear = $('#count-near');
+  const meterMarker = $('#meter-marker');
+  const btnLeave = $('#btn-leave');
+  const btnHome = $('#btn-home');
+  const areaTitle = $('#area-name');
+
+  const layouts = {};      // site id -> { homes, aways } dot positions
+  const awayBySite = {};   // site id -> Set of dot indexes currently outside the circle
+  let site = null;
+  let dots = [];
+
+  // The meter uses the same colour scale and thresholds as the circle.
+  $('#meter-bar').style.background = `linear-gradient(90deg, ${[0, 0.25, 0.5, 0.75, 1]
+    .map((share) => `hsl(${hueFor(share)}, 70%, 46%) ${share * 100}%`).join(', ')})`;
+  $('#tick-safer').style.left = `${SAFER_AT * 100}%`;
+  $('#tick-safe').style.left = `${SAFE_AT * 100}%`;
+  $('#meter-scale').style.gridTemplateColumns = `${Math.round(SAFER_AT * 100)}% ${Math.round((SAFE_AT - SAFER_AT) * 100)}% 1fr`;
+
+  function showArea(dc) {
+    site = dc;
+    pageFind.hidden = true;
+    pageArea.hidden = false;
+    areaTitle.textContent = `${dc.code} · ${dc.name}`;
+    $('#area-place').textContent = where(dc);
+    $('.area-residents').textContent = ` · ${RESIDENTS} residents nearby`;
+    $('#dc-code').textContent = dc.code;
+    document.title = `${dc.code} area · EchoTrace`;
+    renderPeople();
+    update(false);
+    window.scrollTo(0, 0);
+    areaTitle.focus({ preventScroll: true });
+  }
+
+  function renderPeople() {
+    if (!layouts[site.id]) layouts[site.id] = makeLayout(site.id);
+    if (!awayBySite[site.id]) awayBySite[site.id] = new Set();
+    const { homes, aways } = layouts[site.id];
+    const away = awayBySite[site.id];
+    stage.classList.remove('animate');
+    peopleLayer.textContent = '';
+    dots = homes.map((home, i) => {
+      const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      dot.setAttribute('r', '5.5');
+      dot.setAttribute('class', away.has(i) ? 'person is-away' : 'person');
+      placeDot(dot, away.has(i) ? aways[i] : home);
+      peopleLayer.append(dot);
+      return dot;
+    });
+    // Turn transitions on only after the first paint, so dots don't fly in from the corner.
+    requestAnimationFrame(() => requestAnimationFrame(() => stage.classList.add('animate')));
+  }
+
+  function placeDot(dot, point) {
+    dot.style.transform = `translate(${point.x.toFixed(1)}px, ${point.y.toFixed(1)}px)`;
+  }
+
+  const pick = (list) => list[Math.floor(Math.random() * list.length)];
+
+  function leave() {
+    const away = awayBySite[site.id];
+    const atHome = dots.map((_, i) => i).filter((i) => !away.has(i));
+    if (!atHome.length) return;
+    const i = pick(atHome);
+    away.add(i);
+    dots[i].classList.add('is-away');
+    placeDot(dots[i], layouts[site.id].aways[i]);
+    update(true);
+  }
+
+  function comeHome() {
+    const away = awayBySite[site.id];
+    if (!away.size) return;
+    const i = pick([...away]);
+    away.delete(i);
+    dots[i].classList.remove('is-away');
+    placeDot(dots[i], layouts[site.id].homes[i]);
+    update(true);
+  }
+
+  function reset() {
+    const away = awayBySite[site.id];
+    away.forEach((i) => {
+      dots[i].classList.remove('is-away');
+      placeDot(dots[i], layouts[site.id].homes[i]);
+    });
+    away.clear();
+    update(true);
+  }
+
+  function update(animate) {
+    const left = awayBySite[site.id].size;
+    const share = left / RESIDENTS;
+    const level = share >= SAFE_AT ? 'good' : share >= SAFER_AT ? 'warn' : 'bad';
+    const hue = hueFor(share);
+    areaFill.style.fill = `hsl(${hue}, 75%, 50%)`;
+    areaGroup.style.color = `hsl(${hue}, 70%, 34%)`;
+    setCount(countLeft, left, animate);
+    setCount(countNear, RESIDENTS - left, animate);
+    $('#pct').textContent = `${Math.round(share * 100)}% away`;
+    if (pill.dataset.level !== level) {
+      pill.dataset.level = level;
+      pill.textContent = STATUS[level].label;
+      statusText.textContent = STATUS[level].text;
+    }
+    meterMarker.style.left = `${share * 100}%`;
+    btnLeave.disabled = left === RESIDENTS;
+    btnHome.disabled = left === 0;
+    pulse.classList.toggle('running', level === 'good');
+  }
+
+  function setCount(el, value, animate) {
+    if (el.textContent === String(value)) return;
+    el.textContent = value;
+    if (!animate) return;
+    el.classList.remove('bump');
+    void el.offsetWidth;
+    el.classList.add('bump');
+  }
+
+  btnLeave.addEventListener('click', leave);
+  btnHome.addEventListener('click', comeHome);
+  $('#btn-reset').addEventListener('click', reset);
+
+  /* ---------- Dot positions: seeded per site, so each area always looks the same ---------- */
+  function makeLayout(seedText) {
+    const rand = mulberry32(hashString(seedText));
+    const C = 200;          // centre of the 400 x 400 drawing
+    const R = 130;          // the 2 km circle
+    const homes = [];
+    const aways = [];
+    const keepClear = (x, y) =>
+      (Math.abs(x - C) < 32 && Math.abs(y - (C - R)) < 17)    // the "2 km" tag
+      || (Math.abs(x - C) < 34 && y > C + 16 && y < C + 52);  // the site code under the icon
+    const roomAt = (list, x, y, gap) => list.every((p) => (p.x - x) ** 2 + (p.y - y) ** 2 >= gap * gap);
+
+    // Homes: spread evenly inside the circle, clear of the data center icon.
+    const inner = 42;
+    const outer = R - 13;
+    for (let tries = 0; homes.length < RESIDENTS && tries < 20000; tries++) {
+      const a = rand() * Math.PI * 2;
+      const r = Math.sqrt(inner * inner + rand() * (outer * outer - inner * inner));
+      const x = C + r * Math.cos(a);
+      const y = C + r * Math.sin(a);
+      if (!keepClear(x, y) && roomAt(homes, x, y, 21)) homes.push({ x, y, a });
+    }
+
+    // Away spots: outside the circle, roughly straight out from each home.
+    homes.forEach((home) => {
+      let spot;
+      for (let t = 0; t < 80; t++) {
+        const a = home.a + (rand() - 0.5) * (0.6 + t * 0.08);
+        const edge = Math.min(edgeDistance(a, C - 13), 250);
+        const r = R + 18 + rand() * (edge - R - 18);
+        spot = { x: C + r * Math.cos(a), y: C + r * Math.sin(a) };
+        if (!keepClear(spot.x, spot.y) && roomAt(aways, spot.x, spot.y, 17)) break;
+      }
+      aways.push(spot);
+    });
+    return { homes, aways };
+  }
+
+  function edgeDistance(angle, half) {
+    const c = Math.abs(Math.cos(angle));
+    const s = Math.abs(Math.sin(angle));
+    return Math.min(c > 1e-6 ? half / c : Infinity, s > 1e-6 ? half / s : Infinity);
+  }
+
+  function hashString(text) {
+    let h = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return h >>> 0;
+  }
+
+  function mulberry32(seed) {
+    return () => {
+      seed = (seed + 0x6D2B79F5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ---------- Start ---------- */
+  renderSites();
+  route();
+})();
+</script>
+</body>
+</html>
